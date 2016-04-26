@@ -2,7 +2,7 @@
 
 adieu is a time-based user enumerator.
 
-## Python Tool Helptext
+## Helptext
 ```
        (                 
     )  )\ ) (    (   (   
@@ -19,19 +19,19 @@ python ./adieu.py ...
 Options:
 -----------------------------------
         -h,--help               This text.
-        -t,--target=    Target, e.g. timebased.ninja:443.
-        -p,--parameter= The parameter to cycle through, e.g. username.
-        -i,--request=   File containing request, e.g. from Burp.
+        -t,--target=            Target, e.g. timebased.ninja:443.
+        -p,--parameter=         The parameter to cycle through, e.g. username.
+        -i,--request=           File containing request, e.g. from Burp.
         -u,--users=             File with one username per line, or colon-separated usernames.
         -r,--reps=              (Optional) Number of repetitions/iterations to perform. Generally, more is better, but watch out for account lockouts.
-        -k,--keep-alive (Optional) Set Connection: Keep-Alive on outgoing requests (can improve reliability, speed, and accuracy).
-        -n,--preload=   (Optional) To reduce systematic error, preload this many connections and store them in a round-robin-type queue.
-        -l,--lockout=   (Optional) For login forms: Max number of attempts per user to avoid account lockouts. --lockout=0 sets to infinity, but still tracks requests (default=3).
-        --no-lockout    (Optional) For forgotten password forms: Do not track requests.
+        -k,--keep-alive         (Optional) Set Connection: Keep-Alive on outgoing requests (can improve reliability, speed, and accuracy).
+        -n,--preload=           (Optional) To reduce systematic error, preload this many connections and store them in a round-robin-type queue.
+        -l,--lockout=           (Optional) For login forms: Max number of attempts per user to avoid account lockouts. --lockout=0 sets to infinity, but still tracks requests (default=3).
+        --no-lockout            (Optional) For forgotten password forms: Do not track requests.
         -o,--csv=               (Optional) Output the results as a CSV for importing into Excel etc.
         -P,--ping=              (Optional) Specify the average ping delay (ms) between you and the target. The default is to HEAD favicon.ico 10 times. Disable this with --ping=0.
-        -v,--verbose    (Optional) Show verbose logging.
-        --with-graph    (Optional) Show a matplotlib graph of results, if available.
+        -v,--verbose            (Optional) Show verbose logging.
+        --with-graph            (Optional) Show a matplotlib graph of results, if available.
         --delay=                (Optional) Sleep ms between requests.
         --requests              (Debugging) Print requests.
         --responses             (Debugging) Print responses.
