@@ -2,6 +2,13 @@
 
 adieu is a time-based user enumerator.
 
+it takes a POST request as a file (`--request`); choose which parameter to cycle through with `--parameter` and the usernames/emails to try with `--users`.
+
+There are some account lockout protections if you're testing a login form; disable them with `--no-lockout`.
+
+Author: Matt Evans, NCC Group
+Email: Matthew.Evans@NCCGroup.trust
+
 ## Helptext
 ```
        (                 
