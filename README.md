@@ -7,7 +7,8 @@ It takes a POST request as a file (`--request`); choose which parameter to cycle
 There are some account lockout protections if you're testing a login form; disable them with `--no-lockout`.
 
 Author: Matt Evans, NCC Group
-Email: Matthew.Evans@NCCGroup.trust
+
+Email: Matthew.Evans@nccgroup.trust
 
 ## Helptext
 ```
