@@ -1,10 +1,10 @@
 # adieu
 
-adieu is a time-based user enumerator.
+adieu is a time-based user discovery tool.
 
 It can discover users on web apps with time delays down to <10 millisecond resolution, if the conditions are right.
 
-adieu consists of two parts: the __data-collector__ (Python script) and a __macro-enabled Excel spreadsheet__ for plotting nice-looking and -fitting graphs for reports.
+adieu consists of two parts: the __data-collector__ (Python script) and a __macro-enabled Excel spreadsheet__ for visualizing the data. On Linux, matplotlib graphs provide this functionality.
 ## Python Tool Helptext
 ```
        (                 
@@ -15,7 +15,8 @@ adieu consists of two parts: the __data-collector__ (Python script) and a __macr
 / _` / _` | | / -_) || | 
 \__,_\__,_| |_\___|\_,_| 
 
-adieu is a time-based user enumerator.
+ adieu discovers app users
+   based on time delays
 
 	$ python ./adieu.py ...
 
