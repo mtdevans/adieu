@@ -1,12 +1,24 @@
+#!/usr/bin/python
 import socket
 import time
-from urlparse import urlparse
+try:
+    from urlparse import urlparse
+except:
+    from urllib.parse import urlparse
+import urllib
 import datetime
 import ssl
 import sys, getopt
 import numpy
-try: import matplotlib.pyplot as plt
-except: print "[!] Install MatPlotLib to visualize the tool's output.\n"
+# For opening Excel.
+import os
+import subprocess
+# End Excel.
+from colorama import * 
+try:
+    import matplotlib.pyplot as plt
+except:
+    print("[!] Install MatPlotLib to visualize the tool's output.\n")
 
 numpy.set_printoptions(precision=3) # Numpy decimal places.
 
@@ -18,7 +30,7 @@ port = 80
 use_ssl = False
 target = "" # The target host.
 ping = None
-parameter = "user" # Parameter in the POST request file to cycle through.
+parameter = "-" # Parameter in the POST request file to cycle through.
 reps = 1 # Number of cycles.
 preload = 0 # Number of connexions to pre-open.
 keepalive = False # Set request Connection header to hold socket open.
@@ -28,6 +40,21 @@ verbose = False # Print all logged info.
 users = '' # Either valid:invalid or a \n-separated list.
 withgraph = False # Plot graph on linux.
 delay_between_requests = 0.1 # Sleep between requests.
+dont_urlencode = False # Don't urlencode test parameters.
+
+# Colorama requires this.
+init()
+
+# Request building stuff.
+postdata = "" # Post parameters.
+cookiedata = "" # Cookies.
+headers = [
+            ["Host", "localhost"],
+            ["User-Agent", "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/49.0.2623.110 Safari/537.36 Vivaldi/1.0.435.42"],
+            ["Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"],
+            ["Content-Length", "0"],
+            ["Connection", "Close"]
+          ]
 
 # Account lockout protection.
 lockout_filename = 'adieu_lockout_protection.csv'
@@ -49,12 +76,13 @@ y_values = []
 results = []
 
 def client():
-    global keepalive,userlist,x_values,y_values,preload,preload_counter,queue,withgraph,delay_between_requests,lockout_limit,lockout_disable,lockout_displayed_users,parameter,target,use_ssl,host,port
+    global keepalive,userlist,x_values,y_values,preload,preload_counter,queue,withgraph,delay_between_requests
+    global lockout_limit,lockout_disable,lockout_displayed_users,parameter,target,use_ssl,host,port,postdata,cookiedata,dont_urlencode
     
     baseline_error = 0.0
     
-    if inputfile is '':
-        error("No input file specified.")
+    if inputfile is '' and postdata is '':
+        error("No request data specified.")
         exit()
     
     if users is '':
@@ -71,32 +99,17 @@ def client():
             userlist = uf.read().split('\n')
         
     # Remove empty entries.
-    userlist = filter(None, userlist)
+    userlist = list(filter(None, userlist))
         
     if len(userlist) < 2:
         error("Need at least two users.")
         exit()
 
-    with open(inputfile, 'r') as f:
-        filecontents = f.read().replace("\r\n", "\n").rstrip('\n')
-        parameters = filecontents.split('\n\n', 1)[-1].split('&')
-        
-        for i in parameters:
-            args = i.split('=')
-            if args[0] == parameter:
-                filecontents = filecontents.replace(i, args[0] + "=" + "%PLACEHOLDER")
-        
-        if not "%PLACEHOLDER" in filecontents:
-            error("Unable to locate parameter '" + parameter + "'.")
-            if verbose:
-                print "\nFull request:\n------------\n"
-                print filecontents + "\n"
-            exit()
-    
     ## Parse the target.
     target_parsed = urlparse(target)
     port = target_parsed.port
     host = target_parsed.netloc.split(":")[0]
+    requestfile = target_parsed.path
     if target_parsed.scheme == 'https': use_ssl = True
     if port == None:
         if target_parsed.scheme == "http":
@@ -116,10 +129,69 @@ def client():
                 use_ssl = False
     
     if host is '':
-        print "No host specified."
+        print("No host specified.")
         exit()
     if port is 0 or port is None:
-        print "No port specified."
+        print("No port specified.")
+
+    ## Read file or build request.
+    if inputfile is not '':
+        with open(inputfile, 'r') as f:
+            filecontents = f.read()
+    else:
+        # Build request.
+        postdata = postdata.split('&')
+        
+        # Figure out which parameter to use.
+        postdata2 = []
+        foundone = 0
+        for i in postdata:
+            args = i.split('=')
+            if args[1] == "?" or args[1] == "???":
+                args[1] = "???"
+                foundone += 1
+            postdata2.append(args[0] + "=" + args[1])
+        postdata = '&'.join([str(x) for x in postdata2])
+        if foundone is not 1:
+            error("Please use one ? in the postdata to denote which parameter we are cycling through.")
+            exit()
+        
+        # Make sure first character is slash.
+        if requestfile[0] != "/":
+            requestfile = "/" + requestfile
+        filecontents = "POST " + requestfile + " HTTP/1.1\n"
+        # Add headers.
+        for header in headers:
+            filecontents += header[0] + ": " + header[1] + "\n"
+        # Add cookies.
+        if len(cookiedata) > 0:
+            filecontents += "Cookie: " + cookiedata + "\n"
+        
+        filecontents += "\n"
+        filecontents += postdata
+        
+        filecontents = filecontents.replace("Host: localhost", "Host: " + host + ":" + str(port))
+        
+    filecontents = filecontents.replace("\r\n", "\n").rstrip('\n')
+    
+    if parameter != '-':
+        parameters = filecontents.split('\n\n', 1)[-1].split('&')
+        
+        for i in parameters:
+            args = i.split('=')
+            if args[0] == parameter:
+                filecontents = filecontents.replace(i, args[0] + "=" + "???")
+    
+    if not "???" in filecontents:
+        if parameter == '-':
+            error("Please include ??? in the request file at the desired location, or specify the correct parameter using '-p username'.")
+        else:
+            error("Unable to locate parameter '" + parameter + "'.")
+        if verbose:
+            print("\nFull request:\n------------\n")
+            print(filecontents + "\n")
+        exit()
+
     
     ## Account lockout system.
     if lockout_disable:
@@ -131,7 +203,7 @@ def client():
         # Lockout limit of 0 means unlimited.
         with open(lockout_filename, 'a+') as lf:
                 lockout = lf.read().split('\n')
-                lockout = filter(None, lockout) # Remove newlines.
+                lockout = list(filter(None, lockout)) # Remove newlines.
                 for i in range(len(lockout)):
                     lockout[i] = lockout[i].split("\t")
                     for j in range(1,len(lockout[i]),2): lockout[i][j] = int(lockout[i][j])
@@ -149,13 +221,13 @@ def client():
         if not lockout_entry:
             lockout_entry_index = -1
             if lockout_limit == -1:
-                log("No lockout limit supplied: using the default ("+`lockout_limit_default`+").")
+                log("No lockout limit supplied: using the default ("+str(lockout_limit_default)+").")
                 lockout_limit = lockout_limit_default
             else:
                 if lockout_limit == 0:
                     log("Account lockout protection disabled.")
                 else:
-                    log("Using lockout limit "+`lockout_limit`+".")
+                    log("Using lockout limit "+str(lockout_limit)+".")
             
             lockout_entry = [] # This will hold this run's data till we sync back to the db file.
             lockout_entry.append(host)
@@ -174,9 +246,9 @@ def client():
             # Check lockout limit.
             if lockout_limit >= 0 and lockout_limit != lockout_entry[1]:
                 if lockout_limit == 0:
-                    error("Overriding previous account lockout limit for this host (was: "+`lockout_entry[1]`+"; now: disabled).\n")
+                    error("Overriding previous account lockout limit for this host (was: "+str(lockout_entry[1])+"; now: disabled).\n")
                 else:
-                    error("Overriding previous account lockout limit for this host (was: "+`lockout_entry[1]`+"; now: "+`lockout_limit`+").\n")
+                    error("Overriding previous account lockout limit for this host (was: "+str(lockout_entry[1])+"; now: "+str(lockout_limit)+").\n")
                 lockout_entry[1] = lockout_limit
     
         # Array for keeping track.
@@ -202,7 +274,7 @@ def client():
                 iterations -= 1
                 
                 a = datetime.datetime.now()
-                s.send(test_request)
+                s.send(str.encode(test_request))
                 reply = s.recv(4096)
                 b = datetime.datetime.now()
                 
@@ -219,21 +291,21 @@ def client():
         baseline = numpy.mean(baseline_results, axis=0)
         baseline_error = numpy.std(baseline_results, axis=0)
         
-        log("Baseline (" + `len(baseline_results)` + " iterations): " + `baseline`[0:5] + " +- " + `baseline_error`[0:5] + " ms\n", True)
+        log("Baseline (" + str(len(baseline_results)) + " iterations): " + str(baseline)[0:5] + " +- " + str(baseline_error)[0:5] + " ms\n", True)
         
         # Warn if baseline error is too high.
         if baseline_error/baseline > 0.3:
-            if requestYN("[!] Warning: baseline error is high. Connection seems flakey. Continue anyway?", True) == False:
-                print ""
+            if requestYN(Fore.RED+Style.BRIGHT+"[!] Warning: baseline error is high. Connection seems flakey. Continue anyway?"+Style.RESET_ALL, True) == False:
+                print("")
                 log("Exiting.", True)
                 exit()
-            print ""
+            print("")
         
         s.close()
     else:
         baseline = ping
         baseline_error = 0.1*ping
-        log("Baseline (ping): " + `baseline`[0:5] + " +- " + `baseline_error`[0:5] + " ms\n")
+        log("Baseline (ping): " + str(baseline)[0:5] + " +- " + str(baseline_error)[0:5] + " ms\n")
     
     # Preload checks.
     if preload > 0:
@@ -262,7 +334,7 @@ def client():
             if not lockout_disable:
                 # Check lockout count is less than limit.
                 if userlist_count[i] >= lockout_entry[1] and lockout_entry[1] > 0:
-                    #print "Lockout limit: " + `lockout_entry[1]` + "\n"
+                    #print("Lockout limit: " + str(lockout_entry[1]) + "\n")
                     # Only show above error message once.
                     if userlist[i] not in lockout_displayed_users:
                         error("Lockout limit reached for user " + userlist[i] + "!")
@@ -293,37 +365,56 @@ def client():
                 time.sleep(delay_between_requests) # For best results, make sure load on server is light?
                 
                 if verbose:
-                    log("Testing user " + userlist[i])
+                    log(Fore.CYAN + "Testing user " + userlist[i] + Style.RESET_ALL)
                 else:
-                    sys.stdout.write('\r[-] Round ' + `j` + '...' + userlist[i] + ' ' * 20)
+                    sys.stdout.write(Fore.CYAN+'\r[-] Round ' + str(j) + '...' + userlist[i] + Style.RESET_ALL + ' ' * 20)
                     sys.stdout.flush()
                     if i == len(userlist) - 1:
                         printnewline = True
-                        sys.stdout.write('\r[-] Round ' + `j` + '...Done!' + ' ' * 40) # Print the final newline after we know the response was quick.
+                        sys.stdout.write(Fore.CYAN+'\r[-] Round ' + str(j) + '...Done!' + Style.RESET_ALL + ' ' * 40) # Print the final newline after we know the response was quick.
                         sys.stdout.flush()
                     
-                req = filecontents.replace("%PLACEHOLDER", userlist[i])
+                if not dont_urlencode:
+                    urlencoded = ""
+                    try:
+                        urlencoded = urllib.quote_plus(userlist[i])
+                    except:
+                        urlencoded = urllib.parse.quote_plus(userlist[i])
+                    req = filecontents.replace("???", urlencoded)
+                else:
+                    req = filecontents.replace("???", userlist[i])
 
-                # Update content length.
-                length = req[req.find("\n\n")+2:].__len__() - 1
-                req = replaceHeader(req, "Content-Length", `length`)
-                
-                if showrequests:
-                    print req
+                # TODO: Improve this check for if it's a GET.
+                if req.replace("GET /", "gubbins") != req or req.replace("HEAD /", "gubbins") != req:
+                    req = req + "\n\n"
+                else:
+                    # Update content length.
+                    contentlen = req[req.find("\n\n")+2:].__len__()
+                    req = replaceHeader(req, "Content-Length", str(contentlen))
                 
                 # Keep alive?
                 if keepalive:
                     req = replaceHeader(req, "Connection", "keep-alive")
+                
+                if showrequests:
+                    print("\n"+str(req))
 
                 a = datetime.datetime.now()
-                s.send(req)
-                reply = s.recv(4096)
+                # TODO: This is a bit of a hack.
+                req = req.replace("\n","\r\n")
+                s.send(str.encode(req))
+                if sys.version_info[0] >= 3: reply = b''
+                else: reply = ''
+                reply_part =  s.recv(4096)
+                while reply_part:
+                    reply = reply + reply_part
+                    reply_part =  s.recv(4096)
                 
                 b = datetime.datetime.now()
                 y = (b-a).total_seconds() * 1000 - baseline
                 
                 if showresponses:
-                    print reply
+                    print("\n"+str(reply))
                 
                 # Bit of a hack for if the response time is massive (4 * baseline).
                 if (b-a).total_seconds() * 1000 > 50 * baseline and baseline > 10:
@@ -331,21 +422,21 @@ def client():
                     i = i - 1
                     # Clear the line.
                     if i == len(userlist) - 1:
-                        print '\r'
+                        print('\r')
                 else:
                     # Now print the newline.
                     if reps <= limit_reps_for_standard_output and printnewline:
-                        print ""
+                        print("")
                         printnewline = False
                     y_values.append(y)
                     x_values.append(i)
                 if not reply:
                     break
-            except socket.timeout, m:
+            except socket.timeout:
                 error("Socket timed out!")
-            except socket.error, m:
+            except socket.error:
                 error("Socket error!")
-                print m
+                print(m)
                 # A bit of a hack.
                 if preload>0:
                     reconnect(preload_counter)
@@ -353,7 +444,7 @@ def client():
                     s = reconnect()
                 i = i-1
             except KeyboardInterrupt:
-                print "\n\n[!] Interrupt detected. Quitting."
+                print("\n\n[!] Interrupt detected. Quitting.")
                 exit()
             
             if keepalive == False:
@@ -370,7 +461,7 @@ def client():
 
         results.append(y_values)
         y_values=[]
-        if j<J: x_values=[]
+    if j < J: x_values=[]
 
     # Clean up.
     if preload>0:
@@ -399,7 +490,7 @@ def client():
         # Lockout protection: recompile to string.
         for x in range(len(lockout)):
             # Convert integers back to strings.
-            for i in range(1,len(lockout[x]),2): lockout[x][i] = `lockout[x][i]`
+            for i in range(1,len(lockout[x]),2): lockout[x][i] = str(lockout[x][i])
             # Join to tab-separated.
             lockout[x] = '\t'.join(lockout[x])
         lockout = '\n'.join(lockout)
@@ -417,6 +508,8 @@ def client():
     pct = std*100/mean
     
     ## Output results.
+    print("")
+    log("All numbers below are in milliseconds.", True)
     
     # Calculate username lengths.
     min_width = 5 # Minimum column width.
@@ -430,76 +523,55 @@ def client():
     
     # Header row.
     i=0
-    line="\n\nRound | "
+    line = Fore.GREEN + Style.BRIGHT + "\nRound " + Fore.RESET + "| "
     while i<len(userlist):
         v = str(userlist[i])
-        line += v + " " * (userlist_lengths[i] - len(v) + spaces)
+        line += Fore.GREEN + Style.BRIGHT + v + " " * (userlist_lengths[i] - len(v) + spaces) + Fore.RESET
         i += 1
-    print line
-    print dashes
+    print(line + Fore.RESET)
+    print(dashes)
     
     # Raw data.
     i=0
     j=0
     while j<len(results):
-        line=str(j+1) + " "*(8-len(str(j+1))-2) + "| "
+        # Round number.
+        line = Fore.WHITE + Style.BRIGHT + str(j+1) + Fore.RESET + " "*(8-len(str(j+1))-2) + "| "
         i=0
         while i<len(results[j]):
             v = str(results[j][i])[:sf]
-            line += v + " " * (userlist_lengths[i] - len(v) + spaces)
+            line += Fore.WHITE + v + Fore.RESET + " " * (userlist_lengths[i] - len(v) + spaces)
             i += 1
-        print line
+        print(line)
         j += 1
     
-    print dashes
+    print(dashes)
     
     # Averages.
-    line = "Mean  | "
+    line = Fore.GREEN + Style.BRIGHT + "Mean  " + Fore.RESET + "| "
     i=0
     while i<len(mean):
         v = str(mean[i])[:sf]
-        line += v + " " * (userlist_lengths[i] - len(v) + spaces)
+        line += Fore.MAGENTA + v + Fore.RESET + " " * (userlist_lengths[i] - len(v) + spaces)
         i += 1
-    print line
-    line = "Error | "
+    print(line)
+    line = Fore.GREEN + Style.BRIGHT + "Error " + Fore.RESET + "| "
     i=0
     while i<len(std):
         v = str(std[i])[:sf]
-        line += v + " " * (userlist_lengths[i] - len(v) + spaces)
+        line += Fore.MAGENTA + v + Fore.RESET + " " * (userlist_lengths[i] - len(v) + spaces)
         i += 1
-    print line
-    line = "% Err | "
+    print(line)
+    line = Fore.GREEN + Style.BRIGHT + "% Err " + Fore.RESET + "| "
     i=0
     while i<len(pct):
         v = str(pct[i])[:sf]
-        line += v + " " * (userlist_lengths[i] - len(v) + spaces)
+        line += Fore.MAGENTA + v + Fore.RESET + " " * (userlist_lengths[i] - len(v) + spaces)
         i += 1
-    print line
-    
-    if withgraph:
-        try:
-            if len(userlist) == 2:
-                # Separate results.
-                valid = []
-                invalid = []
-                for rep in results:
-                    valid.append(rep[0])
-                    invalid.append(rep[1])
-                
-                # Plot.
-                plt.plot(range(1,len(results)+1), valid)
-                plt.plot(range(1,len(results)+1), invalid)
-            else:
-                # Graph with errors.
-                plt.xticks(x_values, userlist)
-                plt.errorbar(x_values, mean, yerr=std)
-                plt.xticks(x_values, userlist)
-            plt.show()
-        except:
-            error("Could not plot graph =(.")
+    print(line)
         
     # Save results of last run.
-    of = [`(len(userlist))` + ',' + ','.join(userlist)]
+    of = [str(len(userlist)) + ',' + ','.join(userlist)]
     j=0
     while j<len(results):
         of.append(str(j+1) + ',' + ','.join([str(z) for z in numpy.array(results[j])]))
@@ -509,15 +581,44 @@ def client():
     f = open("lastrun.csv", 'w')
     f.truncate()
     f.write(csv)
+    
+	# Plot graph?
+    if withgraph:
+        try:
+            # Try to open Excel.
+            os.environ['opensesame'] = "lastrun.csv"
+            subprocess.Popen(['cmd','/C','start','adieu_graph_plotter.xlsm'], env=dict(os.environ))
+        except:
+            try:
+                if len(userlist) == 2:
+                    # Separate results.
+                    valid = []
+                    invalid = []
+                    for rep in results:
+                        valid.append(rep[0])
+                        invalid.append(rep[1])
+					
+                    # Plot.
+                    plt.plot(range(1,len(results)+1), valid, label="Valid")
+                    plt.plot(range(1,len(results)+1), invalid, label="Invalid")
+                    plt.legend()
+                else:
+                    # Graph with errors.
+                    plt.xticks(x_values[:len(userlist)], userlist)
+                    plt.errorbar(x_values[:len(userlist)], mean, yerr=std)
+                plt.show()
+            except Exception as e:
+                error("Could not plot graph =(.")
+                print(e.args)
         
     # Output
     if outputfile != '':
-        log("Generating " + outputfile + ".csv")
-        f = open(outputfile+".csv", 'w')
+        log("Generating " + outputfile)
+        f = open(outputfile, 'w')
         f.truncate()
         f.write(csv)
-        
-        log("File "+outputfile+".csv created.", True)
+        print("")
+        log("File "+outputfile+" created.", True)
 
     return
 
@@ -545,10 +646,10 @@ def reconnect(n=-1):
         return s
 
 def log(s,t=False):
-    if t or verbose: print "[-] " + s
+    if t or verbose: print(Fore.CYAN+"[-] " + s + Fore.RESET)
 
 def error(s):
-    print "[!] " + s
+    print("[!] " + s)
 
 def plural(n):
     if n==1:
@@ -560,9 +661,9 @@ def plural(n):
 # Unless second arg is specified as True.
 def requestYN(question, defaultToYes=False):
     if not question: return False
-    print question,
-    if defaultToYes: print "[Y/n] ",
-    else: print "[y/n] ",
+    print(question),
+    if defaultToYes: print("[Y/n] "),
+    else: print("[y/n] "),
     answer = sys.stdin.read(1)
     if answer == "y" or answer == "Y": return True
     if answer == "\n" and defaultToYes: return True
@@ -579,25 +680,28 @@ def replaceHeader(request, headerName, headerValue):
     return request[:posn] + headerValue + request[posnNL:]
 
 def main(argv):
-    global verbose,keepalive,withgraph,showrequests,showresponses,host,port,inputfile,outputfile,users,ping,reps,preload,delay_between_requests,lockout_limit,lockout_disable,parameter,target
+    global verbose,keepalive,withgraph,showrequests,showresponses,host,port,inputfile,outputfile,users,ping,reps
+    global preload,delay_between_requests,lockout_limit,lockout_disable,parameter,target,cookiedata,postdata,dont_urlencode
     
-    print """
-       (                 
-    )  )\ ) (    (   (   
- ( /( (()/( )\  ))\ ))\  
- )(_)) ((_)|(_)/((_)((_) 
-((_)_  _| | (_|_))(_))(  
-/ _` / _` | | / -_) || | 
-\__,_\__,_| |_\___|\_,_| 
-                         
-"""
+    print(Fore.MAGENTA+Style.BRIGHT+"""
+        (                 
+     )  )\ ) (    (   (   
+  ( /( (()/( )\  ))\ ))\  
+  )(_)) ((_)|(_)/((_)((_) 
+ ((_)_  _| | (_|_))(_))(  
+ / _) / _) | | / -_) || | 
+ \__,_\__,_| |_\___|\_,_| 
+ """+Style.RESET_ALL)
     
     
     try:
         opts, args = getopt.getopt(argv,"hvki:o:u:t:p:P:r:n:l:",
-                                   ["help","verbose","keep-alive","with-graph","delay=","requests","responses","request=","users=","csv=","target=","ping=","reps=", "preload=", "lockout=", "no-lockout", "parameter="])
+                                   ["help","verbose","keep-alive","with-graph","delay=",
+                                    "requests","responses","request=","users=","csv=",
+                                    "target=","ping=","reps=","preload=","lockout=",
+                                    "no-lockout","ignore-lockout","parameter=","postdata=","cookiedata=","no-encoding"])
     except getopt.GetoptError:
-        print 'Usage:\n\tadieu.py -i <request file> -u <users> -t <target> -p <parameter> ...'
+        print('Unrecognized option. Try '+Fore.MAGENTA+Style.BRIGHT+'python ./adieu.py --help'+Style.RESET_ALL+' for a full list.')
         sys.exit(2)
     for opt, arg in opts:
         if opt in ('-h','--help'):
@@ -611,6 +715,10 @@ def main(argv):
             showresponses = True
         elif opt == "--delay":
             delay_between_requests = float(arg)/1000
+        elif opt == "--postdata":
+            postdata = arg
+        elif opt == "--cookiedata":
+            cookiedata = arg
         elif opt == "--with-graph":
             withgraph = True
         elif opt in ("-v", "--verbose"):
@@ -631,42 +739,83 @@ def main(argv):
             reps = float(arg)
         elif opt in ("-l", "--lockout"):
             lockout_limit = int(arg)
-        elif opt == "--no-lockout":
+        elif opt == "--no-lockout" or opt == "--ignore-lockout":
             lockout_disable = True
         elif opt in ("-n", "--preload"):
             preload = int(arg)
-    
-    client()
+        elif opt == "--no-encoding":
+            dont_urlencode = True
+
+    if len(sys.argv) == 1:
+            helptext()
+            sys.exit()
+    else:
+        client()
+
+# Make s bold.
+def b(s):
+    return Style.BRIGHT + s + Style.RESET_ALL
+# Make blue-bold:
+def bl(s):
+    return Fore.BLUE + Style.BRIGHT + s + Style.RESET_ALL
+# Make purple:
+def p(s):
+    return Fore.MAGENTA + Style.BRIGHT + s + Style.RESET_ALL
 
 def helptext():
-    print "adieu is a time-based user enumerator.\n"
+    print(" adieu discovers app users\r\n   based on time delays\n")
     
-    print "python ./adieu.py ...\n"
+    print(Fore.MAGENTA+Style.BRIGHT+"\t$ python ./adieu.py --target= --users= "+bl("[")+p(" --postdata= ")+bl("OR")+Fore.MAGENTA+Style.BRIGHT+" --request= "+bl("]")+p(" ...\n")+Style.RESET_ALL)
     
-    print "Options:"
+    print(Fore.BLUE+Style.BRIGHT+"Required parameters:"+Style.RESET_ALL+" ("+b("b")+"old indicates short option)")
     
-    options = [
-               ["-h,--help",            "This text."],
-               ["-t,--target=",         "Target, e.g. timebased.ninja:443."],
-               ["-p,--parameter=",      "The parameter to cycle through, e.g. username."],
-               ["-i,--request=",        "File containing request, e.g. from Burp."],
-               ["-u,--users=",          "File with one username per line, or colon-separated usernames."],
-               ["-r,--reps=",           "(Optional) Number of repetitions/iterations to perform. Generally, more is better, but watch out for account lockouts."],
-               ["-k,--keep-alive",      "(Optional) Set Connection: Keep-Alive on outgoing requests (can improve reliability, speed, and accuracy)."],
-               ["-n,--preload=",        "(Optional) To reduce systematic error, preload this many connections and store them in a round-robin-type queue."],
-               ["-l,--lockout=",        "(Optional) For login forms: Max number of attempts per user to avoid account lockouts. --lockout=0 sets to infinity, but still tracks requests (default=3)."],
-               ["--no-lockout",         "(Optional) For forgotten password forms etc: Do not track requests."],
-               ["-o,--csv=",            "(Optional) Output the results as a CSV for importing into Excel."],
-               ["-P,--ping=",           "(Optional) Specify the average ping delay (ms) between you and the target. The default is to HEAD favicon.ico 10 times. Disable this with --ping=0."],
-               ["-v,--verbose",         "(Optional) Show verbose logging."],
-               ["--with-graph",         "(Optional) Show a matplotlib graph of results, if available."],
-               ["--delay=",             "(Optional) Sleep ms between requests."],
+    options1 = [
+               ["--"+b("t")+"arget=",         "Target, e.g. https://timebased.ninja:8443/login.php."],
+               ["--"+b("u")+"sers=",          "File with one username per line, or colon-separated usernames."],
+               ["--postdata=",          "Post data. Specify parameter using a well-placed '???' and adieu will build the request "+bl("..OR..")],
+               ["-i,--request=",        "File containing raw HTTP request. Replace the parameter with '???', or use --parameter=myparam."],
+#               ["-p,--parameter=",      "The parameter to cycle through, e.g. username."],
+               ]
+    options2 = [
+               ["--"+b("h")+"elp      ",            "This text."],
+               ["--cookiedata=",        "Cookie data to include in requests."],
+               ["--"+b("r")+"eps=   ",           "Number of repetitions/iterations to perform. Generally, more is better, but watch out for account lockouts."],
+               ["--"+b("k")+"eep-alive",      "Set Connection: Keep-Alive on outgoing requests (can improve reliability, speed, and accuracy)."],
+               ["-n,--preload=",        "To reduce systematic error, preload this many connections and store them in a round-robin-type queue."],
+               ["--"+b("l")+"ockout=",        "Max attempts per user to avoid locking accounts. -l 0 sets to infinity, but still keeps track of requests (default=3)."],
+               ["--ignore-lockout",         Fore.RED+b("[!Risky!]")+" Use if you aren't concerned about locking accounts out."],
+               ["-o,--csv=",            "Output the results as a CSV for importing into Excel."],
+               ["-P,--ping=",           "Specify the average ping delay (ms) between you and the target. The default is to HEAD favicon.ico 10 times. Disable this with --ping=0."],
+               ["--"+b("v")+"erbose",         "Show verbose logging."],
+               ["--with-graph",         "Show a matplotlib or Excel graph of results, if available."],
+               ["--delay=",             "Sleep ms between requests."],
+               ["--no-encoding",        "Don't URL encode payloads."],
                ["--requests",           "(Debugging) Print requests."],
                ["--responses",          "(Debugging) Print responses."]
               ]
     
-    for i in options:
-        print "\t" + i[0] + "\t\t" + i[1]
+    for i in options1:
+        if "request" in i[0]:
+            print("\t" + i[0] + "\t\t" + i[1])
+        else:
+            print("\t" + i[0] + "\t\t" + i[1])
+    print(Fore.BLUE+Style.BRIGHT+"\nOptional parameters:"+Style.RESET_ALL)
+    
+    for i in options2:
+        if "ignore" in i[0]:
+            print("\t" + i[0] + "\t" + i[1])
+        else:
+            print("\t" + i[0] + "\t\t" + i[1])
+        
+    print("")
+    
+    print(Fore.BLUE+Style.BRIGHT+"Example usage:"+Style.RESET_ALL)
+    print("\tTest whether app is vulnerable using post data:")
+    print(Fore.MAGENTA+Style.BRIGHT+"\t\tpython ./adieu.py --target=https://test.server/adieuTest.php -u \"jeremy:matt\" --postdata=\"user=???&pass=badPass\" --ignore-lockout --reps=3 --csv=out1.csv"+Style.RESET_ALL)
+    print("")
+    print("\tDiscover other users using a request file:")
+    print(Fore.MAGENTA+Style.BRIGHT+"\t\tpython ./adieu.py -i adieuRequest.txt --target=https://test.server -u \"barry:admin:jeremy:matt:jim\" --ignore-lockout --reps=3 --with-graph --csv=out2.csv"+Style.RESET_ALL)
+    print("")
 
 if __name__ == "__main__":
    main(sys.argv[1:])

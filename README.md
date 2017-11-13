@@ -2,13 +2,10 @@
 
 adieu is a time-based user enumerator.
 
-It takes a POST request as a file (`--request`); choose which parameter to cycle through with `--parameter` and the usernames/emails to try with `--users`.
+It can discover users on web apps with time delays down to <10 millisecond resolution, if the conditions are right.
 
-There are some account lockout protections if you're testing a login form; disable them with `--no-lockout`.
-
-Author: Matt Evans, NCC Group (Matthew.Evans@nccgroup.trust)
-
-## Helptext
+adieu consists of two parts: the __data-collector__ (Python script) and a __macro-enabled Excel spreadsheet__ for plotting nice-looking and -fitting graphs for reports.
+## Python Tool Helptext
 ```
        (                 
     )  )\ ) (    (   (   
@@ -16,44 +13,63 @@ Author: Matt Evans, NCC Group (Matthew.Evans@nccgroup.trust)
  )(_)) ((_)|(_)/((_)((_) 
 ((_)_  _| | (_|_))(_))(  
 / _` / _` | | / -_) || | 
-\__,_\__,_| |_\___|\_,_|                                 
+\__,_\__,_| |_\___|\_,_| 
 
 adieu is a time-based user enumerator.
 
-python ./adieu.py ...
+	$ python ./adieu.py ...
 
-Options:
------------------------------------
-        -h,--help               This text.
-        -t,--target=            Target, e.g. timebased.ninja:443.
-        -p,--parameter=         The parameter to cycle through, e.g. username.
-        -i,--request=           File containing request, e.g. from Burp.
-        -u,--users=             File with one username per line, or colon-separated usernames.
-        -r,--reps=              (Optional) Number of repetitions/iterations to perform. Generally, more is better, but watch out for account lockouts.
-        -k,--keep-alive         (Optional) Set Connection: Keep-Alive on outgoing requests (can improve reliability, speed, and accuracy).
-        -n,--preload=           (Optional) To reduce systematic error, preload this many connections and store them in a round-robin-type queue.
-        -l,--lockout=           (Optional) For login forms: Max number of attempts per user to avoid account lockouts. --lockout=0 sets to infinity, but still tracks requests (default=3).
-        --no-lockout            (Optional) For forgotten password forms: Do not track requests.
-        -o,--csv=               (Optional) Output the results as a CSV for importing into Excel etc.
-        -P,--ping=              (Optional) Specify the average ping delay (ms) between you and the target. The default is to HEAD favicon.ico 10 times. Disable this with --ping=0.
-        -v,--verbose            (Optional) Show verbose logging.
-        --with-graph            (Optional) Show a matplotlib graph of results, if available.
-        --delay=                (Optional) Sleep ms between requests.
-        --requests              (Debugging) Print requests.
-        --responses             (Debugging) Print responses.
+Required parameters: (bold indicates short option)
+	--target=		Target, e.g. https://timebased.ninja:8443/login.php.
+	--users=		File with one username per line, or colon-separated usernames.
+	--postdata=		Post data. Specify parameter using a well-placed '???' and adieu will build the request ..OR..
+	-i,--request=	File containing raw HTTP request. Replace the parameter with '???'.
+
+Optional parameters:
+	--help      	This text.
+	--cookiedata=	Cookie data to include in requests.
+	--reps=   		Number of repetitions/iterations to perform. Generally, more is better, but watch out for account lockouts.
+	--keep-alive	Set Connection: Keep-Alive on outgoing requests (can improve reliability, speed, and accuracy).
+	-n,--preload=	To reduce systematic error, preload this many connections and store them in a round-robin-type queue.
+	--lockout=		Max attempts per user to avoid locking accounts. -l 0 sets to infinity, but still keeps track of requests (default=3).
+	--ignore-lockout	[!Risky!] Use if you aren't concerned about locking accounts out.
+	-o,--csv=		Output the results as a CSV for importing into Excel.
+	-P,--ping=		Specify the average ping delay (ms) between you and the target. The default is to HEAD favicon.ico 10 times. Disable this with --ping=0.
+	--verbose		Show verbose logging.
+	--with-graph	Show an Excel or matplotlib graph of results, if available.
+	--delay=		Sleep ms between requests.
+	--no-encoding	Don't URL encode payloads.
+	--requests		(Debugging) Print requests.
+	--responses		(Debugging) Print responses.
+
+Example usage:
+	Test whether app is vulnerable:
+		python ./adieu.py --target=https://test.server/adieuTest.php -u "jeremy:matt" --postdata="user=???&pass=badPass" --ignore-lockout --reps=3 --csv=out1.csv
+
+	Discover other users using request file:
+		python ./adieu.py -i adieuRequest.txt --parameter=username --target=https://test.server -u "barry:admin:jeremy:matt:jim" --ignore-lockout --with-graph --csv=out2.csv
 ```
 
-There are quite a few ways unreliable errors creep in when doing time-based tests, especially remotely over the Internet.
+## Graph Plotter
+Running with `--with-graph` will open up Excel automatically on Windows. Alternatively, you can import the CSV at a later point (e.g. if running on Linux) by opening the .xslm file.
 
-This is especially true when the time difference could be less than 10ms which is pretty difficult to detect.
+The macro supports Excel 2016, and not Excel 2010.
+### Graph types
+There are two graphs produced depending on the number of users tested.
 
-The tool overcomes these errors a few ways:  
-1. `--keep-alive` requests that the server keep the connection open so we can send a load of requests down the same open pipe. This is desirable because, especially with TLS-enabled hosts, the TCP and TLS handshakes can be pretty time-consuming.  
-2. `--preload=#` creates a round-robin-style array of preloaded connections which removes any delays due to handshakes etc.  
-3. `--reps=#` allows you to repeat the results and weedle out errors. Watch out for account lockouts.
+If only two are supplied, the tool assumes the format is testing the difference in delay between valid and invalid accounts.
+This is generally the first step in discovering if the website is vulnerable.
 
-Also, the tool attempts to discover the transit time to and from the host using either user-supplied `ping` (e.g. `--ping=30` for 30ms) or `HEAD /favicon.ico HTTP/1.0` 10 times over if no `--ping=` flag is set. You can disable this by setting `--ping=0`.
+If more than two are supplied, the tool creates a graph with the usernames along the x-axis and a trace of the mean time delays across repetitions.
+You'll generally need three repetitions for a reliable result, though if you can see the effect from just one request per account the issue can be considered more serious (>info).
+### Editing graphs
+Because the graphs source their data from Excel, you can delete any dodgy-looking results and the graphs will auto-update.
+An automated remedy to dodgy results is in the pipeline.
+### Avoiding Account Lockouts
+If you're testing a login form, there's a chance you'll lock accounts out because of a bunch of failed login attempts.
 
-~~Any obviously-useless results due to network latency issues are discarded and repeated until the result is reasonable.~~ Update: after some real-world testing, this feature has been temporarily pulled back until it can be made more intelligent and tunable.
+To avoid this, the tool keeps track of attempts per user per site, along with the lockout limit per site. Set `--lockout=n` for a maximum of `n` attempts per account.
 
-`--delay=10` adds a 10ms delay between requests if you're concerned about overloading the server.
+The database is stored in `adieu_lockout_protection.csv` in whatever folder you're in.
+
+If there is no account lockout or you're testing a forgotten password form and aren't bothered, set `--ignore-lockout`.
