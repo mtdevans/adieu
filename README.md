@@ -40,6 +40,7 @@ Optional parameters:
 	--with-graph	Show an Excel or matplotlib graph of results, if available.
 	--delay=		Sleep ms between requests.
 	--no-encoding	Don't URL encode payloads.
+	--outlier-threshold=	Tolerance for accepting a result. The default is 5. It is enabled only if --ignore-lockout and --reps >= 4. To disable, set to zero.
 	--requests		(Debugging) Print requests.
 	--responses		(Debugging) Print responses.
 
@@ -65,7 +66,6 @@ If more than two are supplied, the tool creates a graph with the usernames along
 You'll generally need three repetitions for a reliable result, though if you can see the effect from just one request per account the issue can be considered more serious (>info).
 ### Editing graphs
 Because the graphs source their data from Excel, you can delete any dodgy-looking results and the graphs will auto-update.
-An automated remedy to dodgy results is in the pipeline.
 ### Avoiding Account Lockouts
 If you're testing a login form, there's a chance you'll lock accounts out because of a bunch of failed login attempts.
 
@@ -74,3 +74,9 @@ To avoid this, the tool keeps track of attempts per user per site, along with th
 The database is stored in `adieu_lockout_protection.csv` in whatever folder you're in.
 
 If there is no account lockout or you're testing a forgotten password form and aren't bothered, set `--ignore-lockout`.
+
+Any obviously useless results due to network latency issues are discarded and repeated until the result is reasonable.
+This is still somewhat experimental and not yet perfect.
+The default is to take the middle 30% and rerun results which fall greater than five standard deviations from the mean of this.
+The value is tweakable with `--outlier-threshold`. Setting it to zero disables this feature.
+Note: it only activates when `--ignore-lockout` is enabled and at least four repetitions are used (it's difficult to take percentiles of three results..!)

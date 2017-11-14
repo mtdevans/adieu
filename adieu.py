@@ -6,6 +6,7 @@ try:
 except:
     from urllib.parse import urlparse
 import urllib
+from builtins import range
 import datetime
 import ssl
 import sys, getopt
@@ -21,6 +22,7 @@ except:
     print("[!] Install MatPlotLib to visualize the tool's output.\n")
 
 numpy.set_printoptions(precision=3) # Numpy decimal places.
+numpy.seterr(all='raise') # Turn warnings into exceptions.
 
 # Define some global variables. (Probably not the most elegant way).
 inputfile = ''
@@ -41,6 +43,8 @@ users = '' # Either valid:invalid or a \n-separated list.
 withgraph = False # Plot graph on linux.
 delay_between_requests = 0.1 # Sleep between requests.
 dont_urlencode = False # Don't urlencode test parameters.
+outlier_threshold = 5. # Larger means more permissive. Zero disables.
+rejected_outliers_count = 0 # Keep count for stats' sake.
 
 # Colorama requires this.
 init()
@@ -76,8 +80,8 @@ y_values = []
 results = []
 
 def client():
-    global keepalive,userlist,x_values,y_values,preload,preload_counter,queue,withgraph,delay_between_requests
-    global lockout_limit,lockout_disable,lockout_displayed_users,parameter,target,use_ssl,host,port,postdata,cookiedata,dont_urlencode
+    global results,keepalive,userlist,x_values,y_values,preload,preload_counter,queue,withgraph,delay_between_requests
+    global lockout_limit,lockout_disable,lockout_displayed_users,parameter,target,use_ssl,host,port,postdata,cookiedata,dont_urlencode,outlier_threshold,rejected_outliers_count
     
     baseline_error = 0.0
     
@@ -373,63 +377,25 @@ def client():
                         printnewline = True
                         sys.stdout.write(Fore.CYAN+'\r[-] Round ' + str(j) + '...Done!' + Style.RESET_ALL + ' ' * 40) # Print the final newline after we know the response was quick.
                         sys.stdout.flush()
-                    
-                if not dont_urlencode:
-                    urlencoded = ""
-                    try:
-                        urlencoded = urllib.quote_plus(userlist[i])
-                    except:
-                        urlencoded = urllib.parse.quote_plus(userlist[i])
-                    req = filecontents.replace("???", urlencoded)
-                else:
-                    req = filecontents.replace("???", userlist[i])
-
-                # TODO: Improve this check for if it's a GET.
-                if req.replace("GET /", "gubbins") != req or req.replace("HEAD /", "gubbins") != req:
-                    req = req + "\n\n"
-                else:
-                    # Update content length.
-                    contentlen = req[req.find("\n\n")+2:].__len__()
-                    req = replaceHeader(req, "Content-Length", str(contentlen))
                 
-                # Keep alive?
-                if keepalive:
-                    req = replaceHeader(req, "Connection", "keep-alive")
+                req = build_request(userlist[i], filecontents)
                 
                 if showrequests:
                     print("\n"+str(req))
-
-                a = datetime.datetime.now()
-                # TODO: This is a bit of a hack.
-                req = req.replace("\n","\r\n")
-                s.send(str.encode(req))
-                if sys.version_info[0] >= 3: reply = b''
-                else: reply = ''
-                reply_part =  s.recv(4096)
-                while reply_part:
-                    reply = reply + reply_part
-                    reply_part =  s.recv(4096)
                 
-                b = datetime.datetime.now()
-                y = (b-a).total_seconds() * 1000 - baseline
+                (reply, y) = run_test(req, s, baseline)
                 
                 if showresponses:
                     print("\n"+str(reply))
                 
-                # Bit of a hack for if the response time is massive (4 * baseline).
-                if (b-a).total_seconds() * 1000 > 50 * baseline and baseline > 10:
-                    log("Oops! Reponse took too long, retrying.") # Probably dodgy network error somewhere. It happens...
-                    i = i - 1
-                    # Clear the line.
-                    if i == len(userlist) - 1:
-                        print('\r')
-                else:
-                    # Now print the newline.
-                    if reps <= limit_reps_for_standard_output and printnewline:
-                        print("")
-                        printnewline = False
-                    y_values.append(y)
-                    x_values.append(i)
+                # Now print the newline.
+                if reps <= limit_reps_for_standard_output and printnewline:
+                    print("")
+                    printnewline = False
+                
+                y_values.append(y)
+                x_values.append(i)
+                
                 if not reply:
                     break
             except socket.timeout:
@@ -502,14 +468,100 @@ def client():
 
     # Calculate mean and standard deviation.
     res = numpy.array(results)
+    
+    ## Remove outliers here.
+    # Regain handle to socket.
+    preload_counter = 0
+    queue = []
+    if preload > 0:
+        # Obtain handle to a socket.
+        for i in range(preload): reconnect(i)
+    else:
+        s = reconnect()
+        
+    if outlier_threshold > 0. and lockout_disable is True and reps >= 4:
+        max_retests = 3 * len(userlist)
+        print("")
+        first = True
+        while True:
+            changedSomething = False
+            
+            # Remove outliers, then re-run the tests until the arrays are filled once again.
+            res = numpy.apply_along_axis(reject_outliers, axis=0, arr=res)
+            
+            if not verbose:
+                if not first:
+                    sys.stdout.write("\033[F")
+                else:
+                    first = False
+            log('Retest count:  ' + str(rejected_outliers_count) + ' result' + ('' if rejected_outliers_count is 1 else 's') + ' so far.', True)
+            
+            # If there was an outlier, it will have the value 3.14159.
+            itemindex = numpy.where(res==3.14159)
+            for i in range(len(itemindex[0])):
+            
+                if preload>0:
+                    # Obtain handle to a socket.
+                    s = queue[preload_counter]
+                    
+                    # Increase preload counter and deal with overflow.
+                    preload_counter = (preload_counter + 1) % preload
+                
+                user = userlist[itemindex[1][i]]
+                time.sleep(delay_between_requests)
+                
+                req = build_request(user, filecontents)
+                (reply, y) = run_test(req, s, baseline)
+                
+                log("Retesting user " + user + ": " + str(y)[:5] + "ms (old mean: " + str(res[itemindex[0][i]].mean())[:5] + "ms)")
+                
+                res[itemindex[0][i]][itemindex[1][i]] = y
+                
+                changedSomething = True
+                max_retests = max_retests - 1
+                
+                if not verbose:
+                    # Print live results table.
+                    output_results(res)
+                    # Go to top of table.
+                    for i in range(0,int(9+reps)): sys.stdout.write("\033[1A" + Style.RESET_ALL)
+                
+                # If we are preloading, reconnect this socket.
+                if preload>0: reconnect(preload_counter)
+                else: s = reconnect()
+                
+            if changedSomething is False or max_retests <= 0:
+                break
+            
+        if verbose:
+            print("\n")
+        else:
+            sys.stdout.write("\033[F" + Style.RESET_ALL)
+            sys.stdout.write("\033[F" + Style.RESET_ALL)
+            sys.stdout.write("\033[K"+"\n"+"\033[K")
+        log("Finished fixing outliers. Check the numbers in the last row as they may still be dodgy (retesting limited to three per user).", True)
+    else:
+        print("")
+        log("Outlier removal disabled.", True)
+    
+    output_results(res)
+    save_results(res)
+
+def output_results(res):  
+    global results,keepalive,userlist,x_values,y_values,preload,preload_counter,queue,withgraph,delay_between_requests
+    global lockout_limit,lockout_disable,lockout_displayed_users,parameter,target,use_ssl,host,port,postdata,cookiedata,dont_urlencode,outlier_threshold,rejected_outliers_count
+    
     mean = numpy.mean(res, axis=0)
     std = numpy.std(res, axis=0)
     #std = quadrature(std,baseline_error) # Combine errors in quadrature. No longer do this because it's pointless.
     pct = std*100/mean
     
     ## Output results.
+    sys.stdout.write("\033[K")
     print("")
+    sys.stdout.write("\033[K")
     log("All numbers below are in milliseconds.", True)
+    sys.stdout.write("\033[K")
     
     # Calculate username lengths.
     min_width = 5 # Minimum column width.
@@ -534,6 +586,7 @@ def client():
     # Raw data.
     i=0
     j=0
+    results = res # Hack to reference updated results due to outliers.
     while j<len(results):
         # Round number.
         line = Fore.WHITE + Style.BRIGHT + str(j+1) + Fore.RESET + " "*(8-len(str(j+1))-2) + "| "
@@ -569,7 +622,15 @@ def client():
         line += Fore.MAGENTA + v + Fore.RESET + " " * (userlist_lengths[i] - len(v) + spaces)
         i += 1
     print(line)
-        
+
+def save_results(res):
+    global results,keepalive,userlist,x_values,y_values,preload,preload_counter,queue,withgraph,delay_between_requests
+    global lockout_limit,lockout_disable,lockout_displayed_users,parameter,target,use_ssl,host,port,postdata,cookiedata,dont_urlencode,outlier_threshold,rejected_outliers_count
+    
+    mean = numpy.mean(res, axis=0)
+    std = numpy.std(res, axis=0)
+    pct = std*100/mean
+    
     # Save results of last run.
     of = [str(len(userlist)) + ',' + ','.join(userlist)]
     j=0
@@ -597,10 +658,13 @@ def client():
                     for rep in results:
                         valid.append(rep[0])
                         invalid.append(rep[1])
-					
+                    
+                    validerr = numpy.array(valid).std()
+                    invaliderr = numpy.array(invalid).std()
+                    
                     # Plot.
-                    plt.plot(range(1,len(results)+1), valid, label="Valid")
-                    plt.plot(range(1,len(results)+1), invalid, label="Invalid")
+                    plt.errorbar(range(1,len(results)+1), valid, yerr=validerr, label="Valid")
+                    plt.errorbar(range(1,len(results)+1), invalid, yerr=validerr, label="Invalid")
                     plt.legend()
                 else:
                     # Graph with errors.
@@ -622,11 +686,113 @@ def client():
 
     return
 
+# Runs a single check.
+def run_test(req, s, baseline):
+    reply = ""
+    
+    # TODO: This is a bit of a hack.
+    req = req.replace("\n","\r\n")
+    if sys.version_info[0] >= 3: reply = b''
+    else: reply = ''
+    
+    a = datetime.datetime.now()
+    s.send(str.encode(req))
+    
+    reply_part =  s.recv(4096)
+    b = datetime.datetime.now() # Log traffic reception instantly.
+    while reply_part: # Then actually read the response.
+        reply = reply + reply_part
+        reply_part =  s.recv(4096)
+    
+    y = (b-a).total_seconds() * 1000 - baseline
+    
+    return (reply, y)
+
+def build_request(user, filecontents):
+    global dont_urlencode, keepalive
+    if not dont_urlencode:
+        urlencoded = ""
+        try:
+            urlencoded = urllib.quote_plus(user)
+        except:
+            urlencoded = urllib.parse.quote_plus(user)
+        req = filecontents.replace("???", urlencoded)
+    else:
+        req = filecontents.replace("???", user)
+
+    # TODO: Improve this check for if it's a GET.
+    if req.replace("GET /", "gubbins") != req or req.replace("HEAD /", "gubbins") != req:
+        req = req + "\n\n"
+    else:
+        # Update content length.
+        contentlen = req[req.find("\n\n")+2:].__len__()
+        req = replaceHeader(req, "Content-Length", str(contentlen))
+    
+    # Keep alive?
+    if keepalive:
+        req = replaceHeader(req, "Connection", "keep-alive")
+    
+    return req
+
+# Modified from: https://stackoverflow.com/a/45399188
+'''
+def reject_outliers_2(data, m = 6.):
+    global rejected_outliers_count
+    d = numpy.abs(data - numpy.median(data))
+    mdev = numpy.median(d)
+    s = d/(mdev if mdev else 1.)
+    ret_data = data[s<m]
+    rejected_outliers_count = rejected_outliers_count + data.shape[0] - ret_data.shape[0]
+    return numpy.lib.pad(ret_data, (0,(data.shape[0]-ret_data.shape[0])), "constant",)
+'''
+
+# Because the data is heavily skewed, this takes a little more thought.
+# It's relatively less likely for a result to be super quick, as the lower
+# threshold for the round-trip time is pretty much fixed.
+# However, it's fairly common for a packet to be misrouted and the resulting
+# delay to be considerable, with the result that the mean is heavily distorted.
+# The best option is to take percentiles, and then use some semi-empirical
+# measure to form the accepted/rejected criterion.
+def reject_outliers(data):
+    global outlier_threshold, rejected_outliers_count
+	
+    lower_centile = 35
+    upper_centile = 65
+	
+    while True:
+        
+        # Deduce the lower and upper percentiles.
+        plower = numpy.percentile(data, lower_centile)
+        pupper = numpy.percentile(data, upper_centile)
+        
+        # Take the middle group spanning the two percentiles and calculate the mean and standard deviation.
+        middle = data[numpy.argwhere((data>=plower) & (data<=pupper))]
+		
+        if len(middle) is 0:
+            lower_centile = lower_centile - 5
+            upper_centile = upper_centile + 5
+            #log("Moved centiles...", True)
+            continue
+		
+        middlem = middle.mean()
+        middles = middle.std()
+        break
+        
+    
+    # For each value, deduce the value relative to the standard deviation of the mean of the middle group.
+    d = numpy.abs(data - middlem)
+    s = d/(middles if middles else 1.)
+    ret_data = data[s < outlier_threshold]
+    rejected_outliers_count = rejected_outliers_count + data.shape[0] - ret_data.shape[0]
+    return numpy.lib.pad(ret_data, (0,(data.shape[0]-ret_data.shape[0])), "constant", constant_values=(0.,3.14159))
+
 # If preloading, n is the index in the queue array to reconnect.
 def reconnect(n=-1):
+    
+    if n > preload: return False
+    
     # Use ssl?
     if use_ssl:
-        log("Using TLS.")
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s = ssl.wrap_socket(sock, cert_reqs=ssl.CERT_NONE)
     else:
@@ -636,10 +802,10 @@ def reconnect(n=-1):
     
     if preload > 0 and n!=-1:
         if len(queue) < preload:
-            #log("Creating socket #"+str(n))
+            log("Creating socket #"+str(n))
             queue.append(s)
         else:
-            #log("Overwriting socket #"+str(n))
+            log("Overwriting socket #"+str(n))
             queue[n] = s
     else:
         # Return a handle to this connexion.
@@ -681,7 +847,7 @@ def replaceHeader(request, headerName, headerValue):
 
 def main(argv):
     global verbose,keepalive,withgraph,showrequests,showresponses,host,port,inputfile,outputfile,users,ping,reps
-    global preload,delay_between_requests,lockout_limit,lockout_disable,parameter,target,cookiedata,postdata,dont_urlencode
+    global preload,delay_between_requests,lockout_limit,lockout_disable,parameter,target,cookiedata,postdata,dont_urlencode,outlier_threshold
     
     print(Fore.MAGENTA+Style.BRIGHT+"""
         (                 
@@ -697,7 +863,7 @@ def main(argv):
     try:
         opts, args = getopt.getopt(argv,"hvki:o:u:t:p:P:r:n:l:",
                                    ["help","verbose","keep-alive","with-graph","delay=",
-                                    "requests","responses","request=","users=","csv=",
+                                    "outlier-threshold=","requests","responses","request=","users=","csv=",
                                     "target=","ping=","reps=","preload=","lockout=",
                                     "no-lockout","ignore-lockout","parameter=","postdata=","cookiedata=","no-encoding"])
     except getopt.GetoptError:
@@ -745,6 +911,11 @@ def main(argv):
             preload = int(arg)
         elif opt == "--no-encoding":
             dont_urlencode = True
+        elif opt == "--outlier-threshold":
+            if int(arg) <= 0:
+                outlier_threshold = 0
+            else:
+                outlier_threshold = int(arg)
 
     if len(sys.argv) == 1:
             helptext()
@@ -752,6 +923,16 @@ def main(argv):
     else:
         client()
 
+# Make s bold.
+def b(s):
+    return Style.BRIGHT + s + Style.RESET_ALL
+# Make blue-bold:
+def bl(s):
+    return Fore.BLUE + Style.BRIGHT + s + Style.RESET_ALL
+# Make purple:
+def p(s):
+    return Fore.MAGENTA + Style.BRIGHT + s + Style.RESET_ALL
+        
 # Make s bold.
 def b(s):
     return Style.BRIGHT + s + Style.RESET_ALL
@@ -790,6 +971,7 @@ def helptext():
                ["--with-graph",         "Show a matplotlib or Excel graph of results, if available."],
                ["--delay=",             "Sleep ms between requests."],
                ["--no-encoding",        "Don't URL encode payloads."],
+               ["--outlier-threshold=",  "Tolerance for accepting a result. The default is 5. It is enabled only if --ignore-lockout and --reps >= 4. To disable, set to zero."],
                ["--requests",           "(Debugging) Print requests."],
                ["--responses",          "(Debugging) Print responses."]
               ]
@@ -802,7 +984,7 @@ def helptext():
     print(Fore.BLUE+Style.BRIGHT+"\nOptional parameters:"+Style.RESET_ALL)
     
     for i in options2:
-        if "ignore" in i[0]:
+        if "ignore" in i[0] or "threshold" in i[0]:
             print("\t" + i[0] + "\t" + i[1])
         else:
             print("\t" + i[0] + "\t\t" + i[1])
