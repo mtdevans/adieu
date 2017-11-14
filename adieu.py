@@ -639,7 +639,8 @@ def save_results(res):
         j += 1
     csv = '\n'.join(of)
     
-    f = open("lastrun.csv", 'w')
+    fname = urlparse(target).hostname + "-" + time.strftime("%Y%m%d-%H.%M.%S") + ".csv"
+    f = open(fname, 'w')
     f.truncate()
     f.write(csv)
     
@@ -647,7 +648,7 @@ def save_results(res):
     if withgraph:
         try:
             # Try to open Excel.
-            os.environ['opensesame'] = "lastrun.csv"
+            os.environ['opensesame'] = fname
             subprocess.Popen(['cmd','/C','start','adieu_graph_plotter.xlsm'], env=dict(os.environ))
         except:
             try:
